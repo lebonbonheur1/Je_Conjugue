@@ -1,4 +1,4 @@
-name: Construire APK Kivy Android
+name: Build Kivy Android APK
 
 on:
   push:
@@ -6,91 +6,83 @@ on:
       - main
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Vérifier le code source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Installer Python et Buildozer
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y python3-pip openjdk-17-jdk unzip
-          pip install --upgrade pip
-          pip install buildozer cython virtualenv
+          sudo apt install -y python3-pip zip unzip openjdk-17-jdk wget git
 
-      - name: Installer SDK Android et accepter les licences
+      # ✅ Étape 1 : Installer les Android command-line tools
+      - name: Install Android command-line tools (cmdline-tools)
         env:
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          sudo mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-          cd $ANDROID_SDK_ROOT/cmdline-tools
-          sudo rm -rf latest
-          sudo mkdir latest
-          cd latest
-          wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
-          sudo unzip cmdtools.zip
-          sudo rm cmdtools.zip
-          yes | sudo $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          yes | sudo $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --update
-          yes | sudo $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" \
-            "build-tools;34.0.0" \
-            "platforms;android-34" \
-            "cmdline-tools;latest" \
-            "tools"
-
-      - name: S'assurer que Buildozer voit le SDK (symlink ou copie)
-        run: |
           set -e
-          SYSTEM_SDK="/usr/local/lib/android/sdk"
-          TARGET_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          echo "SYSTEM_SDK=$SYSTEM_SDK"
-          echo "TARGET_DIR=$TARGET_DIR"
+          SYSTEM_SDK="$ANDROID_SDK_ROOT"
+          TMP_DIR="/tmp/cmdline-tools-install"
+          wget_url="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
 
-          mkdir -p "$(dirname "$TARGET_DIR")"
+          sudo mkdir -p "$SYSTEM_SDK"
+          rm -rf "$TMP_DIR"
+          mkdir -p "$TMP_DIR"
+          cd "$TMP_DIR"
 
-          if [ -L "$TARGET_DIR" ] || [ -d "$TARGET_DIR" ]; then
-            echo "Removing existing $TARGET_DIR"
-            sudo rm -rf "$TARGET_DIR"
+          echo "📦 Téléchargement des Android command line tools..."
+          wget -q "$wget_url" -O commandlinetools.zip
+
+          echo "📂 Décompression..."
+          unzip -q commandlinetools.zip -d cmdline-tools-temp
+
+          TARGET="$SYSTEM_SDK/cmdline-tools/latest"
+          if [ -d "$TARGET" ]; then
+            echo "🧹 Suppression de l'ancien dossier $TARGET"
+            sudo rm -rf "$TARGET"
           fi
+          sudo mkdir -p "$TARGET"
+          sudo cp -a cmdline-tools-temp/cmdline-tools/* "$TARGET"/
 
-          echo "Trying to create symlink $TARGET_DIR -> $SYSTEM_SDK"
-          sudo ln -s "$SYSTEM_SDK" "$TARGET_DIR" || true
+          rm -rf "$TMP_DIR"
 
-          if [ -d "$TARGET_DIR/build-tools" ]; then
-            echo "Symlink worked and build-tools found."
-          else
-            echo "Symlink did not expose build-tools. Will copy required folders."
-            sudo mkdir -p "$TARGET_DIR"
-            if [ -d "$SYSTEM_SDK/platform-tools" ]; then
-              echo "Copying platform-tools..."
-              sudo cp -a "$SYSTEM_SDK/platform-tools" "$TARGET_DIR/"
-            fi
-            if [ -d "$SYSTEM_SDK/build-tools" ]; then
-              echo "Copying build-tools..."
-              sudo cp -a "$SYSTEM_SDK/build-tools" "$TARGET_DIR/"
-            fi
-            if [ -d "$SYSTEM_SDK/cmdline-tools" ]; then
-              sudo mkdir -p "$TARGET_DIR/cmdline-tools"
-              sudo cp -a "$SYSTEM_SDK/cmdline-tools" "$TARGET_DIR/"
-            fi
-          fi
+          echo "✅ Command line tools installés dans $TARGET"
 
-          echo "Final listing of $TARGET_DIR:"
-          ls -la "$TARGET_DIR" || true
-          ls -la "$TARGET_DIR/build-tools" || true
+          echo "ANDROID_SDK_ROOT=$SYSTEM_SDK" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$SYSTEM_SDK" >> $GITHUB_ENV
+          echo "$SYSTEM_SDK/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$SYSTEM_SDK/platform-tools" >> $GITHUB_PATH
 
-      - name: Générer APK
+      # ✅ Étape 2 : Accepter les licences et installer SDK/Build-tools
+      - name: Install Android SDK packages
         run: |
-          if [ ! -f buildozer.spec ]; then
-            echo "Aucun buildozer.spec trouvé, création d’un modèle..."
-            buildozer init
-          fi
+          sudo mkdir -p $ANDROID_SDK_ROOT
+          yes | sdkmanager --sdk_root=${ANDROID_SDK_ROOT} --licenses || true
+          sdkmanager --sdk_root=${ANDROID_SDK_ROOT} "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      # ✅ Étape 3 : Installer Buildozer et Cython
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip
+          pip install buildozer Cython
+
+      # ✅ Étape 4 : Construire l'APK
+      - name: Build Kivy Android APK
+        run: |
+          echo "🚀 Lancement de la construction de l'APK..."
+          buildozer init || true
           buildozer -v android debug
 
-      - name: Sauvegarder l’APK en artefact
+      # ✅ Étape 5 : Sauvegarder le fichier APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: JeConjugue-APK
