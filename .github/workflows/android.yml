@@ -18,13 +18,17 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y python3-pip zip unzip openjdk-17-jdk wget git
 
-      # ✅ Étape 1 : Installer les Android command-line tools
-      - name: Install Android command-line tools (cmdline-tools)
+      - name: Install Buildozer and Cython
+        run: |
+          pip install --upgrade pip
+          pip install buildozer cython
+
+      - name: Install Android command-line tools
         env:
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
@@ -38,50 +42,42 @@ jobs:
           mkdir -p "$TMP_DIR"
           cd "$TMP_DIR"
 
-          echo "📦 Téléchargement des Android command line tools..."
           wget -q "$wget_url" -O commandlinetools.zip
-
-          echo "📂 Décompression..."
           unzip -q commandlinetools.zip -d cmdline-tools-temp
 
           TARGET="$SYSTEM_SDK/cmdline-tools/latest"
           if [ -d "$TARGET" ]; then
-            echo "🧹 Suppression de l'ancien dossier $TARGET"
             sudo rm -rf "$TARGET"
           fi
           sudo mkdir -p "$TARGET"
           sudo cp -a cmdline-tools-temp/cmdline-tools/* "$TARGET"/
-
           rm -rf "$TMP_DIR"
-
-          echo "✅ Command line tools installés dans $TARGET"
 
           echo "ANDROID_SDK_ROOT=$SYSTEM_SDK" >> $GITHUB_ENV
           echo "ANDROID_HOME=$SYSTEM_SDK" >> $GITHUB_ENV
           echo "$SYSTEM_SDK/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$SYSTEM_SDK/platform-tools" >> $GITHUB_PATH
 
-      # ✅ Étape 2 : Accepter les licences et installer SDK/Build-tools
       - name: Install Android SDK packages
         run: |
-          sudo mkdir -p $ANDROID_SDK_ROOT
           yes | sdkmanager --sdk_root=${ANDROID_SDK_ROOT} --licenses || true
-          sdkmanager --sdk_root=${ANDROID_SDK_ROOT} "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          sdkmanager --sdk_root=${ANDROID_SDK_ROOT} \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "platform-tools"
 
-      # ✅ Étape 3 : Installer Buildozer et Cython
-      - name: Install Buildozer
+      - name: Verify build-tools and aidl
         run: |
-          pip install --upgrade pip
-          pip install buildozer Cython
+          echo "Contenu de build-tools:"
+          ls -la $ANDROID_SDK_ROOT/build-tools
+          echo "Vérification de aidl:"
+          find $ANDROID_SDK_ROOT/build-tools -name aidl
 
-      # ✅ Étape 4 : Construire l'APK
       - name: Build Kivy Android APK
         run: |
-          echo "🚀 Lancement de la construction de l'APK..."
           buildozer init || true
           buildozer -v android debug
 
-      # ✅ Étape 5 : Sauvegarder le fichier APK
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
