@@ -1,0 +1,37 @@
+name: Build Kivy Android APK
+
+on:
+  push:
+    branches:
+      - main  # se déclenche à chaque push sur la branche main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-dev build-essential \
+          git zip unzip openjdk-11-jdk
+        pip install --upgrade pip
+        pip install cython==0.29.34 kivy buildozer
+
+    - name: Build APK
+      run: |
+        buildozer -v android debug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: app-debug-apk
+        path: bin/*.apk
