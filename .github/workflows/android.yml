@@ -27,7 +27,7 @@ jobs:
         pip install cython==0.29.34 kivy==2.3.0 buildozer
 
     - name: Accept Android SDK licenses
-      run: yes | $ANDROID_HOME/tools/bin/sdkmanager --licenses
+      run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 
     - name: Build APK
       run: buildozer -v android debug
