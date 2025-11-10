@@ -57,11 +57,11 @@ jobs:
           sudo mkdir -p "$TARGET"
           sudo cp -a cmdline-tools-temp/cmdline-tools/* "$TARGET"/
 
-          # cleanup
+          # cleanup temp
           cd /
           rm -rf "$TMP_DIR"
 
-          # export env for subsequent steps
+          # export env and paths for following steps
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
           echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
@@ -72,11 +72,12 @@ jobs:
           set -e
           SDK_ROOT="${ANDROID_SDK_ROOT}"
           export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+
           echo "Updating sdkmanager..."
           sdkmanager --sdk_root="$SDK_ROOT" --update || true
 
-          echo "Attempting to install required SDK packages (non-interactive)..."
-          # try to install multiple build-tools (36.1.0 and 34.0.0) to cover p4a demands
+          echo "Installing required SDK packages (platform-tools, platforms, build-tools)..."
+          # installer plusieurs versions pour couverture
           yes | sdkmanager --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-33" "platforms;android-34" "build-tools;36.1.0" "build-tools;34.0.0" || true
 
           echo "Force-accept all licenses..."
@@ -93,14 +94,14 @@ jobs:
             sudo rm -rf "$TARGET_DIR"
           fi
 
-          # create symlink
+          echo "Creating symlink $TARGET_DIR -> $SYSTEM_SDK"
           sudo ln -s "$SYSTEM_SDK" "$TARGET_DIR" || true
 
-          # if symlink didn't expose build-tools, copy them
-          if [ -d "$TARGET_DIR/build-tools" ] && [ "$(ls -A $TARGET_DIR/build-tools)" ]; then
-            echo "build-tools found via symlink."
+          # If symlink didn't expose build-tools, copy them
+          if [ -d "$TARGET_DIR/build-tools" ] && [ "$(ls -A "$TARGET_DIR/build-tools" 2>/dev/null)" ]; then
+            echo "build-tools is present through symlink."
           else
-            echo "Symlink did not expose build-tools or they are empty; copying build-tools and platform-tools."
+            echo "Symlink not sufficient; copying build-tools and platform-tools."
             sudo mkdir -p "$TARGET_DIR"
             if [ -d "$SYSTEM_SDK/build-tools" ]; then
               sudo cp -a "$SYSTEM_SDK/build-tools" "$TARGET_DIR/"
@@ -114,29 +115,69 @@ jobs:
             fi
           fi
 
-          echo "Final listing of target SDK path:"
+          echo "Final listing of $TARGET_DIR:"
           ls -la "$TARGET_DIR" || true
           ls -la "$TARGET_DIR/build-tools" || true
+
+      - name: Create legacy tools/bin/sdkmanager shim for Buildozer
+        run: |
+          set -e
+          P4A_SDK="$HOME/.buildozer/android/platform/android-sdk"
+          SYS_SDK="${ANDROID_SDK_ROOT}"
+          LEGACY_TOOLS="$P4A_SDK/tools"
+          LEGACY_BIN="$LEGACY_TOOLS/bin"
+
+          sudo mkdir -p "$LEGACY_BIN"
+
+          # link sdkmanager from cmdline-tools if exists
+          if [ -x "$SYS_SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "Linking sdkmanager to legacy location"
+            sudo ln -sf "$SYS_SDK/cmdline-tools/latest/bin/sdkmanager" "$LEGACY_BIN/sdkmanager"
+          else
+            echo "sdkmanager not found in cmdline-tools/latest; creating wrapper"
+            cat <<'EOF' | sudo tee "$LEGACY_BIN/sdkmanager" > /dev/null
+#!/bin/bash
+if command -v sdkmanager >/dev/null 2>&1; then
+  exec sdkmanager "$@"
+else
+  exec /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager "$@"
+fi
+EOF
+            sudo chmod +x "$LEGACY_BIN/sdkmanager"
+          fi
+
+          # ensure platform-tools and build-tools links exist in p4a path
+          if [ -d "$SYS_SDK/platform-tools" ]; then
+            sudo ln -sfn "$SYS_SDK/platform-tools" "$P4A_SDK/platform-tools"
+          fi
+          if [ -d "$SYS_SDK/build-tools" ]; then
+            sudo ln -sfn "$SYS_SDK/build-tools" "$P4A_SDK/build-tools"
+          fi
+
+          echo "Listing legacy locations:"
+          ls -la "$LEGACY_BIN" || true
+          "$LEGACY_BIN/sdkmanager" --version || true
 
       - name: Verify aidl and build-tools presence
         run: |
           set -e
           SDK_TARGET="$HOME/.buildozer/android/platform/android-sdk"
           echo "SDK target: $SDK_TARGET"
-          echo "Listing build-tools:"
+          echo "Listing build-tools content:"
           ls -la "$SDK_TARGET/build-tools" || true
           echo "Searching for aidl binary..."
           find "$SDK_TARGET/build-tools" -type f -name aidl -exec echo "FOUND: {}" \; || true
-          echo "Check platform-tools:"
+          echo "Platform-tools listing:"
           ls -la "$SDK_TARGET/platform-tools" || true
 
       - name: Build Kivy Android APK
         run: |
           set -e
-          # ensure buildozer.spec exists; buildozer init will not overwrite an existing spec
           if [ ! -f buildozer.spec ]; then
+            echo "buildozer.spec not found, creating default with buildozer init"
             buildozer init
           fi
+          echo "Starting Buildozer..."
           buildozer -v android debug
 
       - name: Upload APK artifact
