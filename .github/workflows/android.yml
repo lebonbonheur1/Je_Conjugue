@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout repository
@@ -18,64 +21,122 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install system dependencies
+      - name: Install system packages
         run: |
           sudo apt update
-          sudo apt install -y python3-pip zip unzip openjdk-17-jdk wget git
+          sudo apt install -y python3-pip zip unzip wget git openjdk-17-jdk build-essential
 
       - name: Install Buildozer and Cython
         run: |
-          pip install --upgrade pip
-          pip install buildozer cython
+          python3 -m pip install --upgrade pip
+          pip install buildozer Cython==0.29.34
 
-      - name: Install Android command-line tools
-        env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      - name: Install Android command-line tools (safe install via /tmp)
         run: |
           set -e
-          SYSTEM_SDK="$ANDROID_SDK_ROOT"
+          SDK_ROOT="${ANDROID_SDK_ROOT}"
           TMP_DIR="/tmp/cmdline-tools-install"
-          wget_url="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
 
-          sudo mkdir -p "$SYSTEM_SDK"
+          sudo mkdir -p "$SDK_ROOT"
           rm -rf "$TMP_DIR"
           mkdir -p "$TMP_DIR"
           cd "$TMP_DIR"
 
-          wget -q "$wget_url" -O commandlinetools.zip
+          echo "Downloading Android command line tools..."
+          wget -q "$URL" -O commandlinetools.zip
+
+          echo "Unzipping..."
           unzip -q commandlinetools.zip -d cmdline-tools-temp
 
-          TARGET="$SYSTEM_SDK/cmdline-tools/latest"
+          TARGET="$SDK_ROOT/cmdline-tools/latest"
           if [ -d "$TARGET" ]; then
+            echo "Removing existing $TARGET"
             sudo rm -rf "$TARGET"
           fi
           sudo mkdir -p "$TARGET"
           sudo cp -a cmdline-tools-temp/cmdline-tools/* "$TARGET"/
+
+          # cleanup
+          cd /
           rm -rf "$TMP_DIR"
 
-          echo "ANDROID_SDK_ROOT=$SYSTEM_SDK" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$SYSTEM_SDK" >> $GITHUB_ENV
-          echo "$SYSTEM_SDK/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$SYSTEM_SDK/platform-tools" >> $GITHUB_PATH
+          # export env for subsequent steps
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Install Android SDK packages
+      - name: Update sdkmanager and install SDK packages (force build-tools)
         run: |
-          yes | sdkmanager --sdk_root=${ANDROID_SDK_ROOT} --licenses || true
-          sdkmanager --sdk_root=${ANDROID_SDK_ROOT} \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "platform-tools"
+          set -e
+          SDK_ROOT="${ANDROID_SDK_ROOT}"
+          export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          echo "Updating sdkmanager..."
+          sdkmanager --sdk_root="$SDK_ROOT" --update || true
 
-      - name: Verify build-tools and aidl
+          echo "Attempting to install required SDK packages (non-interactive)..."
+          # try to install multiple build-tools (36.1.0 and 34.0.0) to cover p4a demands
+          yes | sdkmanager --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-33" "platforms;android-34" "build-tools;36.1.0" "build-tools;34.0.0" || true
+
+          echo "Force-accept all licenses..."
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses || true
+
+      - name: Ensure Buildozer sees the SDK (symlink or copy)
         run: |
-          echo "Contenu de build-tools:"
-          ls -la $ANDROID_SDK_ROOT/build-tools
-          echo "Vérification de aidl:"
-          find $ANDROID_SDK_ROOT/build-tools -name aidl
+          set -e
+          SYSTEM_SDK="${ANDROID_SDK_ROOT}"
+          TARGET_DIR="$HOME/.buildozer/android/platform/android-sdk"
+
+          mkdir -p "$(dirname "$TARGET_DIR")"
+          if [ -e "$TARGET_DIR" ] || [ -L "$TARGET_DIR" ]; then
+            sudo rm -rf "$TARGET_DIR"
+          fi
+
+          # create symlink
+          sudo ln -s "$SYSTEM_SDK" "$TARGET_DIR" || true
+
+          # if symlink didn't expose build-tools, copy them
+          if [ -d "$TARGET_DIR/build-tools" ] && [ "$(ls -A $TARGET_DIR/build-tools)" ]; then
+            echo "build-tools found via symlink."
+          else
+            echo "Symlink did not expose build-tools or they are empty; copying build-tools and platform-tools."
+            sudo mkdir -p "$TARGET_DIR"
+            if [ -d "$SYSTEM_SDK/build-tools" ]; then
+              sudo cp -a "$SYSTEM_SDK/build-tools" "$TARGET_DIR/"
+            fi
+            if [ -d "$SYSTEM_SDK/platform-tools" ]; then
+              sudo cp -a "$SYSTEM_SDK/platform-tools" "$TARGET_DIR/"
+            fi
+            if [ -d "$SYSTEM_SDK/cmdline-tools" ]; then
+              sudo mkdir -p "$TARGET_DIR/cmdline-tools"
+              sudo cp -a "$SYSTEM_SDK/cmdline-tools" "$TARGET_DIR/"
+            fi
+          fi
+
+          echo "Final listing of target SDK path:"
+          ls -la "$TARGET_DIR" || true
+          ls -la "$TARGET_DIR/build-tools" || true
+
+      - name: Verify aidl and build-tools presence
+        run: |
+          set -e
+          SDK_TARGET="$HOME/.buildozer/android/platform/android-sdk"
+          echo "SDK target: $SDK_TARGET"
+          echo "Listing build-tools:"
+          ls -la "$SDK_TARGET/build-tools" || true
+          echo "Searching for aidl binary..."
+          find "$SDK_TARGET/build-tools" -type f -name aidl -exec echo "FOUND: {}" \; || true
+          echo "Check platform-tools:"
+          ls -la "$SDK_TARGET/platform-tools" || true
 
       - name: Build Kivy Android APK
         run: |
-          buildozer init || true
+          set -e
+          # ensure buildozer.spec exists; buildozer init will not overwrite an existing spec
+          if [ ! -f buildozer.spec ]; then
+            buildozer init
+          fi
           buildozer -v android debug
 
       - name: Upload APK artifact
