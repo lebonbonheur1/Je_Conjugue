@@ -1,5 +1,4 @@
-  GNU nano 8.6                                                        .github/workflows/build-android.yml
-name: Build Android (Buildozer)
+name: Build Android (Buildozer Docker)
 
 on:
   push:
@@ -9,39 +8,20 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: kivy/buildozer:latest
     timeout-minutes: 180
 
     steps:
-    # Étape 1 : récupérer le dépôt
     - uses: actions/checkout@v4
 
-    # Étape 2 : configurer Python
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-
-    # Étape 3 : installer les dépendances système nécessaires
-    - name: Install apt dependencies
+    # Vérifier la version de Buildozer et tar
+    - name: Vérifier Buildozer et tar
       run: |
-        sudo apt-get update
-        sudo apt-get install -y git python3-pip openjdk-11-jdk zip unzip zlib1g-dev libncurses6 tar wget curl
+        buildozer --version
+        tar --version
 
-    # Étape 4 : vérifier que tar est bien installé
-    - name: Vérifier tar
-      run: tar --version
-
-    # Étape 5 : installer Buildozer et Cython
-    - name: Install buildozer & cython
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install buildozer==1.4.0 cython
-
-    # Étape 6 : lancer la compilation de l’APK debug
+    # Construire l’APK debug
     - name: Build APK (debug)
       run: |
         buildozer -v android debug
-
-
-
-
