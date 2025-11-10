@@ -1,26 +1,22 @@
 [app]
-title = Je Conjugue
-package.name = jeconjugue
-package.domain = org.example
 
-# Dossier source
+title = Ardoise V1
+package.name = monprojetkivy
+package.domain = com.votredomaine   ; <- A MODIFIER (Exemple: com.monnom)
+version = 0.1
+requirements = python3,kivy,sdl2_mixer
 source.dir = .
-
-# Fichier principal
-source.main = main_app.py
-
-# Version de l'application
-version = 1.0
-
-# Orientation
+source.exclude_dirs = tests, bin, .buildozer, __pycache__
+main.py = main.py
+android.archs = arm64-v8a
+android.minapi = 21
+android.api = 27
 orientation = portrait
+debug = True
 
-# Dépendances Python
-requirements = python3,kivy
+[buildozer]
+log_level = 1
+build_dir = .buildozer
+bin_dir = bin
 
-# Inclure tous les fichiers du projet
-source.include_exts = py,png,jpg,kv,atlas,db
-
-# Permissions Android si nécessaire
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE
-
+[app-specific]
